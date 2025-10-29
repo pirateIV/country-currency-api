@@ -36,9 +36,15 @@ const countrySchema = new mongoose.Schema(
       type: String,
     },
   },
-  {
-    timestamps: true,
-  },
 )
+
+countrySchema.set("toJSON", {
+  transform: (doc, ret) => {
+    ret.id = ret._id
+    delete ret._id
+    delete ret.__v
+    return ret
+  },
+})
 
 module.exports = mongoose.model("Country", countrySchema)

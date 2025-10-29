@@ -1,150 +1,205 @@
-const Country = require("../models/Country")
-const { fetchCountries, fetchExchangeRates } = require("../utils/apis")
-// const { generateSummaryImage } = require("../utils/imageGenerator")
+const Country = require("../models/Country");
+const { fetchCountries, fetchExchangeRates } = require("../utils/apis");
+const { generateSummaryImage } = require("../utils/imageGenerator");
 
-// Refresh countries and exchange rates
+// Compute GDP from population × random(1000–2000) ÷ exchange_rate
+function estimateGdp(population, exchangeRate) {
+  if (population == null || exchangeRate == null) return null;
+  const randomMultiplier = Math.floor(Math.random() * 1001) + 1000;
+  return (population * randomMultiplier) / exchangeRate;
+}
+
 exports.refreshCountries = async (req, res, next) => {
   try {
-    // Fetch external data
-    const countriesData = await fetchCountries()
-    const exchangeRates = await fetchExchangeRates()
+    const countriesData = await fetchCountries();
+    const exchangeRates = await fetchExchangeRates();
 
-    if (!countriesData || !exchangeRates) {
+    if (!countriesData) {
       return res.status(503).json({
         error: "External data source unavailable",
-        details: "Could not fetch data from external APIs",
-      })
+        details: "Could not fetch data from REST Countries API",
+      });
+    }
+    if (!exchangeRates) {
+      return res.status(503).json({
+        error: "External data source unavailable",
+        details: "Could not fetch data from Exchange Rates API",
+      });
     }
 
-    try {
-      for (const country of countriesData) {
-        const { name, capital, region, population, currencies, flag } = country
+    const now = new Date();
+    const docsToUpsert = [];
 
-        let currencyCode = null
-        let exchangeRate = null
-        let estimatedGdp = 0
+    for (const c of countriesData) {
+      const { name, capital, region, population, currencies, flag } = c;
 
-        // Handle currency
-        if (currencies && currencies.length > 0) {
-          currencyCode = currencies[0].code
-          exchangeRate = exchangeRates.rates[currencyCode] || null
+      if (!name || population == null) continue;
 
-          if (exchangeRate) {
-            const randomMultiplier = Math.floor(Math.random() * 1001) + 1000
-            estimatedGdp = (population * randomMultiplier) / exchangeRate
-          }
+      let currencyCode = null;
+      let exchangeRate = null;
+      let estimatedGdp = null;
+
+      if (Array.isArray(currencies) && currencies.length > 0) {
+        currencyCode = currencies[0].code || null;
+        if (currencyCode && exchangeRates?.rates) {
+          exchangeRate = exchangeRates.rates[currencyCode] ?? null;
+          estimatedGdp = exchangeRate
+            ? estimateGdp(population, exchangeRate)
+            : null;
         }
-
-        // Upsert country using Mongoose
-        await Country.findOneAndUpdate(
-          { name },
-          {
-            name,
-            capital,
-            region,
-            population,
-            currencyCode,
-            exchangeRate,
-            estimatedGdp,
-            flagUrl: flag,
-          },
-          { upsert: true, new: true },
-        )
       }
 
-      res.json({
-        message: "Countries data refreshed successfully",
-        total_countries: countriesData.length,
-      })
-    } catch (error) {
-      throw error
-    } 
-  } catch (error) {
-    next(error)
+      const updateDoc = {
+        $set: {
+          name,
+          capital: capital || null,
+          region: region || null,
+          population,
+          currency_code: currencyCode,
+          exchange_rate: exchangeRate,
+          estimated_gdp: estimatedGdp,
+          flag_url: flag || null,
+          last_refreshed_at: now,
+        },
+      };
+
+      docsToUpsert.push({
+        filter: { name: new RegExp(`^${escapeRegExp(name)}$`, "i") },
+        update: updateDoc,
+        options: { upsert: true, new: true },
+      });
+    }
+
+    for (const item of docsToUpsert) {
+      const existing = await Country.findOne(item.filter).exec();
+      if (existing) {
+        await Country.updateOne({ _id: existing._id }, item.update).exec();
+      } else {
+        await Country.create(item.update.$set);
+      }
+    }
+
+    const totalCountries = docsToUpsert.length;
+    const top5 = await Country.find({ estimated_gdp: { $ne: null } })
+      .sort({ estimated_gdp: -1 })
+      .limit(5)
+      .select("name estimated_gdp")
+      .lean()
+      .exec();
+
+    const summary = {
+      total_countries: totalCountries,
+      last_refreshed_at: now.toISOString(),
+      top5: top5.map((t) => ({
+        name: t.name,
+        estimated_gdp: t.estimated_gdp,
+      })),
+    };
+
+    try {
+      await generateSummaryImage(summary);
+    } catch (imgErr) {
+      console.error("Image generation failed:", imgErr);
+    }
+
+    res.json({
+      // message: "Countries data refreshed successfully",
+      total_countries: totalCountries,
+      last_refreshed_at: now.toISOString(),
+    });
+  } catch (err) {
+    console.error(err);
+    return next(err);
   }
+};
+
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Get all countries with filters and sorting
 exports.getAllCountries = async (req, res, next) => {
   try {
-    const { region, currency, sort } = req.query
-    const query = {}
+    const { region, currency, sort } = req.query;
+    const query = {};
 
-    if (region) {
-      query.region = region
-    }
+    if (region) query.region = region;
+    if (currency) query.currency_code = currency;
 
-    if (currency) {
-      query.currencyCode = currency
-    }
+    let q = Country.find(query);
 
-    let mongooseQuery = Country.find(query)
+    if (sort === "gdp_desc") q = q.sort({ estimated_gdp: -1 });
+    else if (sort === "gdp_asc") q = q.sort({ estimated_gdp: 1 });
+    else if (sort === "population_desc") q = q.sort({ population: -1 });
+    else if (sort === "population_asc") q = q.sort({ population: 1 });
+    else q = q.sort({ name: 1 });
 
-    // Sorting
-    if (sort === "gdp_desc") {
-      mongooseQuery = mongooseQuery.sort({ estimatedGdp: -1 })
-    } else if (sort === "gdp_asc") {
-      mongooseQuery = mongooseQuery.sort({ estimatedGdp: 1 })
-    } else if (sort === "population_desc") {
-      mongooseQuery = mongooseQuery.sort({ population: -1 })
-    } else if (sort === "population_asc") {
-      mongooseQuery = mongooseQuery.sort({ population: 1 })
-    } else {
-      mongooseQuery = mongooseQuery.sort({ name: 1 })
-    }
-
-    const countries = await mongooseQuery.exec()
-    res.json(countries)
-  } catch (error) {
-    next(error)
+    const countries = await q.exec();
+    res.json(countries);
+  } catch (err) {
+    next(err);
   }
-}
+};
 
-// Get country by name
 exports.getCountryByName = async (req, res, next) => {
   try {
-    const { name } = req.params
-    const country = await Country.findOne({ name: new RegExp(`^${name}$`, "i") })
-
-    if (!country) {
-      return res.status(404).json({ error: "Country not found" })
-    }
-
-    res.json(country)
-  } catch (error) {
-    next(error)
+    const { name } = req.params;
+    const country = await Country.findOne({
+      name: new RegExp(`^${escapeRegExp(name)}$`, "i"),
+    });
+    if (!country)
+      return res.status(404).json({ error: "Country not found" });
+    res.json(country);
+  } catch (err) {
+    next(err);
   }
-}
+};
 
-// Delete country
 exports.deleteCountry = async (req, res, next) => {
   try {
-    const { name } = req.params
-    const result = await Country.findOneAndDelete({ name: new RegExp(`^${name}$`, "i") })
-
-    if (!result) {
-      return res.status(404).json({ error: "Country not found" })
-    }
-
-    res.json({ message: "Country deleted successfully" })
-  } catch (error) {
-    next(error)
+    const { name } = req.params;
+    const result = await Country.findOneAndDelete({
+      name: new RegExp(`^${escapeRegExp(name)}$`, "i"),
+    });
+    if (!result)
+      return res.status(404).json({ error: "Country not found" });
+    res.json({ message: "Country deleted successfully" });
+  } catch (err) {
+    next(err);
   }
-}
+};
 
-// Get summary image
 exports.getSummaryImage = async (req, res, next) => {
   try {
-    const fs = require("fs")
-    const path = require("path")
-    const imagePath = path.join(__dirname, "../cache/summary.png")
-
+    const fs = require("fs");
+    const path = require("path");
+    const imagePath = path.join(__dirname, "../cache/summary.png");
     if (!fs.existsSync(imagePath)) {
-      return res.status(404).json({ error: "Summary image not found" })
+      return res.status(404).json({ error: "Summary image not found" });
     }
-
-    res.sendFile(imagePath)
-  } catch (error) {
-    next(error)
+    return res.sendFile(imagePath);
+  } catch (err) {
+    next(err);
   }
-}
+};
+
+exports.getStatus = async (req, res, next) => {
+  try {
+    const total = await Country.countDocuments().exec();
+    const recent = await Country.findOne({
+      last_refreshed_at: { $ne: null },
+    })
+      .sort({ last_refreshed_at: -1 })
+      .select("last_refreshed_at")
+      .lean()
+      .exec();
+
+    res.json({
+      total_countries: total,
+      last_refreshed_at: recent
+        ? recent.last_refreshed_at.toISOString()
+        : null,
+    });
+  } catch (err) {
+    next(err);
+  }
+};

@@ -1,19 +1,28 @@
 {
-  "name": "hng_task-2-backend",
+  "name": "country-currency-api",
   "version": "1.0.0",
+  "description": "RESTful API for country data with currency exchange rates",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
-  "keywords": [],
+  "keywords": [
+    "countries",
+    "currency",
+    "exchange-rates",
+    "api"
+  ],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
     "axios": "^1.13.1",
+    "canvas": "^3.2.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "mongoose": "^8.19.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   }
 }

@@ -16,10 +16,6 @@ exports.refreshCountries = async (req, res, next) => {
       })
     }
 
-    // Use Mongoose session for transaction
-    const session = await Country.startSession()
-    session.startTransaction()
-
     try {
       for (const country of countriesData) {
         const { name, capital, region, population, currencies, flag } = country
@@ -52,25 +48,17 @@ exports.refreshCountries = async (req, res, next) => {
             estimatedGdp,
             flagUrl: flag,
           },
-          { upsert: true, new: true, session },
+          { upsert: true, new: true },
         )
       }
-
-      await session.commitTransaction()
-
-      // Generate summary image
-      // await generateSummaryImage()
 
       res.json({
         message: "Countries data refreshed successfully",
         total_countries: countriesData.length,
       })
     } catch (error) {
-      await session.abortTransaction()
       throw error
-    } finally {
-      session.endSession()
-    }
+    } 
   } catch (error) {
     next(error)
   }

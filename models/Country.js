@@ -1,50 +1,25 @@
-const mongoose = require("mongoose")
+const mongoose = require("mongoose");
 
-const countrySchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-    },
-    capital: {
-      type: String,
-      trim: true,
-    },
-    region: {
-      type: String,
-      index: true,
-    },
-    population: {
-      type: Number,
-      required: true,
-    },
-    currencyCode: {
-      type: String,
-      index: true,
-    },
-    exchangeRate: {
-      type: Number,
-      default: null,
-    },
-    estimatedGdp: {
-      type: Number,
-      default: 0,
-    },
-    flagUrl: {
-      type: String,
-    },
-  },
-)
+const countrySchema = new mongoose.Schema({
+  name: { type: String, required: true, unique: true },
+  capital: { type: String, default: null },
+  region: { type: String, default: null },
+  population: { type: Number, required: true },
+  currency_code: { type: String, required: true },
+  exchange_rate: { type: Number, required: true },
+  estimated_gdp: { type: Number, default: 0 },
+  flag_url: { type: String, default: null },
+  last_refreshed_at: { type: Date, default: Date.now },
+});
 
 countrySchema.set("toJSON", {
-  transform: (doc, ret) => {
-    ret.id = ret._id
-    delete ret._id
-    delete ret.__v
-    return ret
+  transform: function (doc, ret) {
+    ret.id = doc._id;
+    delete ret._id;
+    delete ret.__v;
+    return ret;
   },
-})
+});
 
-module.exports = mongoose.model("Country", countrySchema)
+const Country = mongoose.model("Country", countrySchema);
+module.exports = Country;
